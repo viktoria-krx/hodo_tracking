@@ -9,6 +9,10 @@ import awkward as ak
 from scipy.optimize import curve_fit
 from scipy.stats import norm
 
+from get_z_from_LEs import compute_z_positions_from_dLE
+
+plt.style.use("asacusa.mplstyle")
+
 hodo_colors = {0: "#33638d", 45: "#482677", 90: "#bc4174", 135: "#d35040", 180: "#fba100", 225: "#fde725", 270: "#95d840", 315: "#3cbb75"}
 
 def gauss(x, a, x0, sigma):
@@ -25,7 +29,7 @@ df["event"] = df.index.get_level_values("entry")
 # df.reset_index(level=("subentry",), inplace=True, names=["channel", "channel"])
 # df["event"] = df.index.get_level_values("entry")
 
-with open("geometry.json", "r") as f:
+with open("geometry_files/geometry.json", "r") as f:
         geometry = json.load(f)
 
 
@@ -33,10 +37,10 @@ def plot_event(event_id, df, geometry, hodo_colors=None):
  
     # Collect active channels
     df_event = df[df.event == event_id]
-    active_outer_bars = df_event[df_event["hodoODsToT"].notna()].channel.to_list()
-    active_inner_bars = df_event[df_event["hodoIDsToT"].notna()].channel.to_list()
-    active_outer_tiles = df_event[df_event["tileOToT"].notna()].channel.to_list()
-    active_inner_tiles = df_event[df_event["tileIToT"].notna()].channel.to_list()
+    active_outer_bars = df_event[df_event["hodoODsLE"].notna() | df_event["hodoOUsLE"].notna()].channel.to_list()
+    active_inner_bars = df_event[df_event["hodoIDsLE"].notna() | df_event["hodoIUsLE"].notna()].channel.to_list()
+    active_outer_tiles = df_event[df_event["tileOLE"].notna()].channel.to_list()
+    active_inner_tiles = df_event[df_event["tileILE"].notna()].channel.to_list()
     active_bgo = df_event[df_event["bgoToT"].notna()].channel.to_list()
 
     # Combine all active hits per layer for quick lookup
@@ -107,13 +111,65 @@ def plot_event(event_id, df, geometry, hodo_colors=None):
     plt.grid(True)
     plt.show()
 
-
-for ev in df.event.unique()[:30]:
+for ev in df.event.unique()[10:20]:
     plot_event(ev, df, geometry, hodo_colors)
 
 
 df["hodoOdLE"] = df.hodoOUsLE - df.hodoODsLE
 df["hodoIdLE"] = df.hodoIUsLE - df.hodoIDsLE
+
+df["hodoOz"] = compute_z_positions_from_dLE(df, "hodoO", "outer", plot=False)
+df["hodoIz"] = compute_z_positions_from_dLE(df, "hodoI", "inner", plot=False)
+
+plt.hist(df.hodoOUsLE - df.hodoODsLE, 100)
+plt.hist(df.hodoOUsLE[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)] - df.hodoODsLE[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)], 100)
+
+plt.scatter(df.hodoOUsLE - df.hodoODsLE, df.hodoOUsLE)
+
+plt.hist2d(df.hodoOUsLE[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)] - df.hodoODsLE[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)], df.hodoOUsLE[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)], bins=(100, 100), range=((-1200, 1200), (0, 1400)), norm="log")
+plt.colorbar()
+
+
+plt.hist(df.hodoOz[(df.hodoOUsLE < 400) & (df.hodoODsLE < 400)], 100, range=(-1200, 1200))
+
+
+plt.hist2d(df.hodoOz, df.channel[df.tileOToT > 0]%15, range=((-250, 250), (0, 15)), bins=(100, 15), norm="log")
+
+
+
+
+
+
+barz_all = []
+tilez_all = []
+
+for ev in df.event.unique():
+    # print("ev:")
+
+    barz = df.hodoOz[~df.hodoOz.isna() & (df.event == ev)].values
+    tilez = [geometry["outer_tiles"][ch]["position"][2] for ch in df.channel[(df.tileOLE> 0) & (df.event == ev)]]
+    # print(barz)
+    # print(tilez)
+
+
+    for comb in zip(barz, tilez):
+        if len(comb) > 1:
+            # print(comb)
+            barz_all.append(comb[0])
+            tilez_all.append(comb[1])
+
+plt.hist2d(barz_all, tilez_all, range=((-300, 300), (-250, 250)), bins=(45, 15))#, norm="log")
+plt.colorbar()
+plt.xlabel("Bar z position (mm)")
+plt.ylabel("Tile z position (mm)")
+plt.show()
+
+
+
+
+
+geometry["outer_tiles"][14]["position"]
+
 
 # sigO = np.zeros(32)*np.nan
 # meanO = np.zeros(32)*np.nan

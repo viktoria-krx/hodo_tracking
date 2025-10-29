@@ -61,7 +61,7 @@ def generate_tiles(tile_width, tile_thickness, tile_length, diameter):
     base_xy = np.array([R, 0.0])
 
     # Z stacking parameters
-    z_start = - 7.5*tile_width
+    z_start = 7.5*tile_width
     z_spacing = tile_width  # evenly fill bar_length
 
     for side in range(8):
@@ -71,7 +71,7 @@ def generate_tiles(tile_width, tile_thickness, tile_length, diameter):
         x, y = round(xy_rot[0], 2), round(xy_rot[1], 2)
 
         for i in range(15):
-            z = round(z_start + i * tile_width + tile_width / 2, 2)  # center each bar
+            z = round(z_start - i * tile_width - tile_width / 2, 2)  # center each bar
             tiles.append({
                 "channel_id": channel_id,
                 "length": tile_width,  # individual short bar
@@ -117,11 +117,11 @@ geometry = {
 }
 
 # Save to file
-with open("geometry.json", "w") as f:
+with open("geometry_files/geometry.json", "w") as f:
     json.dump(geometry, f, indent=2)
 
 
-with open("geometry.json", "r") as f:
+with open("geometry_files/geometry.json", "r") as f:
         data = json.load(f)
 
 

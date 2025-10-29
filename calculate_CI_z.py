@@ -9,6 +9,7 @@ import awkward as ak
 from scipy.stats import norm, uniform
 from scipy.signal import fftconvolve
 from scipy.optimize import curve_fit
+plt.style.use("asacusa.mplstyle")
 
 tree = uproot.open("~/Documents/Hodoscope/cern_data/2025_Data/output_000265.root")["RawEventTree"]
 
@@ -251,6 +252,6 @@ channel_stats = {"outer bars": make_json_serializable(statsO),
 
 
 # Save to file
-with open("CI_z.json", "w") as f:
+with open("geometry_files/CI_z.json", "w") as f:
     json.dump(channel_stats, f, indent=2)
 
