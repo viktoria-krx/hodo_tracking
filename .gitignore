@@ -1,2 +1,4 @@
 *.root
 class_approach/*
+rubbish/*
+*.pyc

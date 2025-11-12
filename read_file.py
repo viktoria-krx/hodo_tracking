@@ -6,6 +6,8 @@ import numpy as np
 import time
 from pathlib import Path
 import json
+import cProfile, pstats
+
 
 # --- 1. Preload geometry into a fast lookup ---
 _GEOMETRY_CACHE = {}
@@ -134,7 +136,7 @@ def reconstruct_bar_z(df, detector, outer_or_inner):
 
 def build_hits_df(root_path, geometry_path="./geometry_files/geometry.json", ci_path="./geometry_files/CI_z.json"):
     tree = uproot.open(root_path)["EventTree"]
-    branches = ["eventID", "fpgaTimeTag", "hodoODsLE", "hodoODsTE", "hodoOUsLE", "hodoOUsTE", "hodoIDsLE", "hodoIDsTE", "hodoIUsLE", "hodoIUsTE", "tileOLE", "tileOTE", "tileILE", "tileOLE", "bgoLE", "bgoTE"]
+    branches = ["eventID", "fpgaTimeTag", "hodoODsLE", "hodoODsTE", "hodoOUsLE", "hodoOUsTE", "hodoIDsLE", "hodoIDsTE", "hodoIUsLE", "hodoIUsTE", "tileOLE", "tileOTE", "tileILE", "tileOLE", "bgoLE", "bgoTE", "bgoToTSum"]
     df = ak.to_dataframe(tree.arrays(branches, library="ak"), how="outer")
     df["channel"] = df.index.get_level_values("subentry")
     df["event"] = df.index.get_level_values("entry")
@@ -214,13 +216,13 @@ def build_hits_df(root_path, geometry_path="./geometry_files/geometry.json", ci_
                     "dx": dx, "dy": dy, "dz": dz,
                     # "ToT": row.get(tot_col, np.nan),
                     "LE": row.get(le_col, np.nan),
-                    "time": row.get("fpgaTimeTag", np.nan)
+                    "time": row.get("fpgaTimeTag", np.nan),
+                    "bgoToTSum": row.get("bgoToTSum", np.nan)
                 })
         
 
     return pd.DataFrame(rows)
 
-import cProfile, pstats
 
 
 def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json", ci_path="./geometry_files/CI_z.json"):
@@ -230,7 +232,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         "hodoODsLE", "hodoODsTE", "hodoOUsLE", "hodoOUsTE",
         "hodoIDsLE", "hodoIDsTE", "hodoIUsLE", "hodoIUsTE",
         "tileOLE", "tileOTE", "tileILE", "tileITE",
-        "bgoLE", "bgoTE"
+        "bgoLE", "bgoTE", "trgLE"
     ]
     df = ak.to_dataframe(tree.arrays(branches, library="ak"), how="outer")
     df["channel"] = df.index.get_level_values("subentry")
@@ -245,12 +247,56 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
     if "mixGate" in df.columns:
         df["mixGate"] = df.groupby("event")["mixGate"].transform("first")
 
+    print(df[df.channel < 4].trgLE)
+
+    def get_trg(row, tdc):
+        try:
+            return row["trgLE"][tdc] if isinstance(row["trgLE"], (list, np.ndarray)) and len(row["trgLE"]) > tdc else np.nan
+        except Exception:
+            return np.nan
+
     print(df)
 
     # Preload geometry & calibration
     load_geometry(geometry_path)
     load_ci_z(ci_path)
 
+    # to do trigger subtraction I need to get which TDC each channel belongs to
+    def get_tdc(det, ch):
+        if det in ("hodoO", "hodoI"):
+            if 4 <= ch <= 19:
+                return 0
+            elif (20 <= ch <= 31) or (0 <= ch <= 3):
+                return 1
+        elif det == "tileO":
+            if 0 <= ch <= 59:
+                return 0
+            elif 60 <= ch <= 119:
+                return 1
+        elif det == "tileI":
+            if 0 <= ch <= 119:
+                return 2
+        elif det == "bgo":
+            if 0 <= ch <= 63:
+                return 3
+        return None
+
+    trg_map = {}
+    for event, group in df.groupby("event"):
+        valid_trg = group[group.channel < 4].dropna(subset=["trgLE"])
+        if not valid_trg.empty:
+            trg_map[event] = valid_trg.set_index("channel")["trgLE"].to_dict()
+        else:
+            trg_map[event] = {}  # no triggers for this event
+    print(trg_map)
+
+    def get_trg_val(row, det):
+        tdc = get_tdc(det, row["channel"])
+        if tdc is None:
+            return np.nan
+        # look up trigger for this event and TDC
+        return trg_map.get(row["event"], {}).get(tdc, np.nan)
+    
     hits_list = []
 
     # ---------- Double-sided detectors (bars) ----------
@@ -260,7 +306,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         te_us_col = f"{det}UsTE"
         te_ds_col = f"{det}DsTE"
         # df_det = df.loc[df.channel < 32, ["channel", "event", le_us_col, le_ds_col]].dropna(how="all")
-        df_det = df[[le_us_col, le_ds_col, te_us_col, te_ds_col, "channel", "event", "fpgaTimeTag", "mixGate"]][df.channel < 32].dropna(subset=[le_us_col, le_ds_col, te_us_col, te_ds_col], how="all").reset_index(drop=True)
+        df_det = df[[le_us_col, le_ds_col, te_us_col, te_ds_col, "trgLE", "channel", "event", "fpgaTimeTag", "mixGate"]][df.channel < 32].dropna(subset=[le_us_col, le_ds_col, te_us_col, te_ds_col], how="all").reset_index(drop=True)
 
         # df_det = (
         #     df[[le_us_col, le_ds_col, "channel", "event"]]
@@ -271,6 +317,14 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 
         if df_det.empty:
             continue
+
+        # Compute trigger value per hit
+        df_det["trg_val"] = df_det.apply(lambda r: get_trg_val(r, det), axis=1)
+
+        # Subtract trigger from LE/TE times
+        for col in df_det.columns:
+            if col.endswith("LE") or col.endswith("TE"):
+                df_det[col] = df_det[col] - df_det["trg_val"]
 
         # Vectorized z reconstruction
         z_reco = reconstruct_bar_z(df_det.copy(), det, outer_or_inner)
@@ -308,6 +362,8 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
             (df_det["dy_local"] * np.cos(df_det["rot_rad"]))**2
         )
 
+        df_det["LE"] = df_det[[le_us_col, le_ds_col]].mean(axis=1)
+        df_det["TE"] = df_det[[te_us_col, te_ds_col]].mean(axis=1)
 
         df_det["dz"] = df_det["length"] / 2.0
 
@@ -315,16 +371,27 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         hits_list.append(df_det[[
             "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate",
             "x", "y", "z", "z_reco", "dx", "dy", "dz",
-            "LE_Us", "LE_Ds", "TE_Us", "TE_Ds"
+            "LE_Us", "LE_Ds", "TE_Us", "TE_Ds", "LE", "TE", "trg_val"
         ]])
 
     # ---------- Single-sided detectors ----------
     for det in ["tileO", "tileI", "bgo"]:
         le_col = f"{det}LE"
         te_col = f"{det}TE"
-        df_det = df.loc[:, ["channel", "event", le_col, te_col, "fpgaTimeTag", "mixGate"]].dropna(subset=[le_col], how="all")
+        df_det = df.loc[:, ["channel", "event", le_col, te_col, "trgLE", "fpgaTimeTag", "mixGate"]].dropna(subset=[le_col], how="all")
         if df_det.empty:
             continue
+
+        # Assign TDC
+        df_det["TDC"] = df_det["channel"].apply(lambda ch: get_tdc(det, ch))
+
+        # Compute trigger value per hit
+        df_det["trg_val"] = df_det.apply(lambda r: get_trg_val(r, det), axis=1)
+
+        # Subtract trigger from LE/TE times
+        for col in df_det.columns:
+            if col.endswith("LE") or col.endswith("TE"):
+                df_det[col] = df_det[col] - df_det["trg_val"]
 
         det_map = {
             "tileO": "outer_tiles",
@@ -370,7 +437,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         df_det.rename(columns={le_col: "LE", te_col: "TE"}, inplace=True)
         hits_list.append(df_det[[
             "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate",
-            "x", "y", "z", "dx", "dy", "dz", "LE", "TE"
+            "x", "y", "z", "dx", "dy", "dz", "LE", "TE", "trg_val"
         ]])
 
     hits_df = pd.concat(hits_list, ignore_index=True)
@@ -389,3 +456,36 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 # stats = pstats.Stats(pr)
 # stats.sort_stats(pstats.SortKey.CUMULATIVE).print_stats(20)
 
+
+
+def build_hits_df_from_runs(run_list, base_path="~/Documents/Hodoscope/cern_data/2025_Data/",
+                            geometry_path="./geometry_files/geometry.json",
+                            ci_path="./geometry_files/CI_z.json"):
+    """
+    Loads multiple ROOT files sequentially and builds one combined hits_df.
+    Ensures event numbering continues across files (no resets to 0).
+    """
+
+    base_path = Path(base_path).expanduser()
+    all_hits = []
+    cumulative_event_offset = 0
+
+    for i, run in enumerate(run_list):
+        root_path = base_path / f"output_00{run}.root"
+        print(f"Loading run {run} from {root_path} ...")
+
+        # build_hits_df_fast returns a dataframe with an 'event' column
+        hits_df = build_hits_df_fast(str(root_path),
+                                     geometry_path=geometry_path,
+                                     ci_path=ci_path)
+
+        # Apply the event offset
+        hits_df["event"] = hits_df["event"] + cumulative_event_offset
+
+        # Update cumulative offset for next file
+        cumulative_event_offset = hits_df["event"].max() + 1
+
+        all_hits.append(hits_df)
+
+    combined_hits_df = pd.concat(all_hits, ignore_index=True)
+    return combined_hits_df
