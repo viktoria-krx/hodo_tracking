@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 import json
 import cProfile, pstats
-
+import glob
 
 # --- 1. Preload geometry into a fast lookup ---
 _GEOMETRY_CACHE = {}
@@ -232,7 +232,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         "hodoODsLE", "hodoODsTE", "hodoOUsLE", "hodoOUsTE",
         "hodoIDsLE", "hodoIDsTE", "hodoIUsLE", "hodoIUsTE",
         "tileOLE", "tileOTE", "tileILE", "tileITE",
-        "bgoLE", "bgoTE", "trgLE"
+        "bgoLE", "bgoTE", "trgLE", "cuspRunNumber"
     ]
     df = ak.to_dataframe(tree.arrays(branches, library="ak"), how="outer")
     df["channel"] = df.index.get_level_values("subentry")
@@ -306,7 +306,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         te_us_col = f"{det}UsTE"
         te_ds_col = f"{det}DsTE"
         # df_det = df.loc[df.channel < 32, ["channel", "event", le_us_col, le_ds_col]].dropna(how="all")
-        df_det = df[[le_us_col, le_ds_col, te_us_col, te_ds_col, "trgLE", "channel", "event", "fpgaTimeTag", "mixGate"]][df.channel < 32].dropna(subset=[le_us_col, le_ds_col, te_us_col, te_ds_col], how="all").reset_index(drop=True)
+        df_det = df[[le_us_col, le_ds_col, te_us_col, te_ds_col, "trgLE", "channel", "event", "fpgaTimeTag", "mixGate", "cuspRunNumber"]][df.channel < 32].dropna(subset=[le_us_col, le_ds_col, te_us_col, te_ds_col], how="all").reset_index(drop=True)
 
         # df_det = (
         #     df[[le_us_col, le_ds_col, "channel", "event"]]
@@ -369,7 +369,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 
         df_det.rename(columns={le_us_col: "LE_Us", le_ds_col: "LE_Ds", te_us_col: "TE_Us", te_ds_col: "TE_Ds"}, inplace=True)
         hits_list.append(df_det[[
-            "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate",
+            "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate", "cuspRunNumber",
             "x", "y", "z", "z_reco", "dx", "dy", "dz",
             "LE_Us", "LE_Ds", "TE_Us", "TE_Ds", "LE", "TE", "trg_val"
         ]])
@@ -378,7 +378,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
     for det in ["tileO", "tileI", "bgo"]:
         le_col = f"{det}LE"
         te_col = f"{det}TE"
-        df_det = df.loc[:, ["channel", "event", le_col, te_col, "trgLE", "fpgaTimeTag", "mixGate"]].dropna(subset=[le_col], how="all")
+        df_det = df.loc[:, ["channel", "event", le_col, te_col, "trgLE", "fpgaTimeTag", "mixGate", "cuspRunNumber"]].dropna(subset=[le_col], how="all")
         if df_det.empty:
             continue
 
@@ -436,7 +436,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 
         df_det.rename(columns={le_col: "LE", te_col: "TE"}, inplace=True)
         hits_list.append(df_det[[
-            "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate",
+            "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate", "cuspRunNumber",
             "x", "y", "z", "dx", "dy", "dz", "LE", "TE", "trg_val"
         ]])
 
@@ -460,7 +460,8 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 
 def build_hits_df_from_runs(run_list, base_path="~/Documents/Hodoscope/cern_data/2025_Data/",
                             geometry_path="./geometry_files/geometry.json",
-                            ci_path="./geometry_files/CI_z.json"):
+                            ci_path="./geometry_files/CI_z.json", 
+                            version="cusp_run"):
     """
     Loads multiple ROOT files sequentially and builds one combined hits_df.
     Ensures event numbering continues across files (no resets to 0).
@@ -471,8 +472,14 @@ def build_hits_df_from_runs(run_list, base_path="~/Documents/Hodoscope/cern_data
     cumulative_event_offset = 0
 
     for i, run in enumerate(run_list):
-        root_path = base_path / f"output_00{run}.root"
-        print(f"Loading run {run} from {root_path} ...")
+        if version == "simple":
+            root_path = base_path / f"output_00{run}.root"
+            print(f"Loading run {run} from {root_path} ...")
+        else: 
+            pattern = str(base_path / f"output_00{run}_*.root")
+            matches = sorted(glob.glob(pattern))
+            root_path = matches[0]
+            print(f"Loading run {run} from {root_path} ...")
 
         # build_hits_df_fast returns a dataframe with an 'event' column
         hits_df = build_hits_df_fast(str(root_path),

@@ -24,16 +24,22 @@ from sklearn.exceptions import UndefinedMetricWarning
 warnings.filterwarnings("ignore", message="R\^2 score is not well-defined")
 plt.style.use("asacusa.mplstyle")
 
+
 root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_001392.root" # Hbar
 
 root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_000636.root" # cosmics
 
-hits_df = build_hits_df_fast(root_path)
-hits_df
+root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_001791_6535_noBug.root" # test_file
+
+
+# hits_df = build_hits_df_fast(root_path)
+# hits_df
 # hits_df["z_used"] = np.where(np.isnan(hits_df["z_reco"]), hits_df["z"], hits_df["z_reco"])
 
 # run_list = np.arange(1392, 1412)
-# hits_df = build_hits_df_from_runs(run_list)
+# hits_df = build_hits_df_from_runs(run_list, version="simple")
+run_list = np.concatenate([np.arange(1705, 1721), np.arange(1724, 1730)])
+hits_df = build_hits_df_from_runs(run_list, version="cusp_run")
 # hits_df
 hits_df["z_used"] = np.where(np.isnan(hits_df["z_reco"]), hits_df["z"], hits_df["z_reco"])
 hits_df["bgoToT"] = hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna()& (hits_df["LE"] < hits_df["TE"])]["TE"] - hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna() & (hits_df["LE"] < hits_df["TE"])]["LE"]
@@ -82,7 +88,7 @@ for eps in [1]:
     print(len(close_vertices), "reconstructed vertices on BGO")
 
 
-    plot_events(clustered_hits, lines_df, clustered_hits.event.unique()[20:60])
+    plot_events(clustered_hits, lines_df, clustered_hits.event.unique()[60:80])
 
 
 
@@ -195,10 +201,17 @@ plt.show()
 
 
 plt.scatter(event_features_df.dt_max, event_features_df.mean_angle, c=event_features_df.time*1e-9)
-plt.xlabel("Mean time difference [ns]")
+plt.xlabel("Max time difference [ns]")
 plt.ylabel("Mean inter-track angle [°]")
 plt.colorbar(label="Time [s]")
 plt.show()
+
+plt.hist2d(event_features_df.dt_max, event_features_df.mean_angle, range=((0, 360), (0, 180)), bins=(50, 18))
+plt.xlabel("Max time difference [ns]")
+plt.ylabel("Mean inter-track angle [°]")
+plt.colorbar()
+plt.show()
+
 
 
 plt.hist2d(event_features_df.time*1e-9, event_features_df.mean_angle, range=((0, 380), (0, 180)), bins=(95, 18))
