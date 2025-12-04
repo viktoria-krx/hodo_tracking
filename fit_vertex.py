@@ -84,7 +84,7 @@ def find_vertices_from_tracks(lines_df, eps=5.0, min_samples=2):
 def reconstruct_vertex_from_midpoints(clustered_hits, lines_df, 
                                       bgo_radius=45.0, 
                                       max_dist_to_bgo=25.0,
-                                      min_midpoints=1):
+                                      min_midpoints=1, cluster_mids=False, cluster_eps=None, cluster_alpha=None):
     """
     Compute event-by-event vertex from line intersections near the central BGO.
     
@@ -123,6 +123,7 @@ def reconstruct_vertex_from_midpoints(clustered_hits, lines_df,
         bgo_pos = bgo_hits[["x", "y", "z"]].to_numpy()
 
         midpoints = []
+        geom_quality = []
         for (iA, rowA), (iB, rowB) in combinations(ev_lines.iterrows(), 2):
             C = np.array(rowA.origin)
             D = np.array(rowB.origin)
@@ -144,6 +145,11 @@ def reconstruct_vertex_from_midpoints(clustered_hits, lines_df,
             M = (c1 + c2) / 2.0
             midpoints.append(M)
 
+            dA = np.linalg.norm(np.cross(M - C, e))
+            dB = np.linalg.norm(np.cross(M - D, f))
+
+            geom_quality.append(dA + dB)
+
         if not midpoints:
             continue
         midpoints = np.vstack(midpoints)
@@ -158,9 +164,32 @@ def reconstruct_vertex_from_midpoints(clustered_hits, lines_df,
         n_mid = len(near_midpoints)
 
         if n_mid >= min_midpoints:
-            V = np.mean(near_midpoints, axis=0)
-            Vsig = np.std(near_midpoints, axis=0)
-            near_bgo = True
+            if cluster_mids and cluster_eps is not None and cluster_alpha is not None:
+
+                g_arr = np.array(geom_quality)
+                # 4D embedding: (x, y, z, alpha * g)
+                alpha = cluster_alpha   # tune: 1..5 recommended
+                midpoints4 = np.column_stack([midpoints, alpha * g_arr])
+
+                db = DBSCAN(eps=cluster_eps, min_samples=1)
+                labels = db.fit_predict(midpoints4)
+
+                valid = labels >= 0
+                if not np.any(valid):
+                    continue
+
+                biggest = np.bincount(labels[valid]).argmax()
+                main_cluster = midpoints[labels == biggest]
+
+                V = np.mean(main_cluster, axis=0)
+                Vsig = np.std(main_cluster, axis=0)
+                near_bgo = True
+                n_mid = len(main_cluster)
+
+            else:
+                V = np.mean(near_midpoints, axis=0)
+                Vsig = np.std(near_midpoints, axis=0)
+                near_bgo = True
         else:
             V = np.array([np.nan, np.nan, np.nan])
             Vsig = np.array([np.nan, np.nan, np.nan])

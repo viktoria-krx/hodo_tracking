@@ -11,7 +11,10 @@ from scipy.signal import fftconvolve
 from scipy.optimize import curve_fit
 plt.style.use("asacusa.mplstyle")
 
-tree = uproot.open("~/Documents/Hodoscope/cern_data/2025_Data/output_000265.root")["RawEventTree"]
+root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_000265.root"
+root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_001825_6567.root" 
+
+tree = uproot.open(root_path)["RawEventTree"]
 
 branches = ["eventID", "hodoODsLE", "hodoOUsLE", "hodoIDsLE", "hodoIUsLE"]
 
@@ -82,15 +85,17 @@ def get_confidence_interval(mu, width, sigma, level=0.95):
     return [lower, upper]
 
 
-hist = plt.hist(rdf.hodoOdLE[(rdf.hodoOdLE > -20) & (rdf.hodoOdLE < 20) & (rdf.channel == 2)], 100, range=(-20,20), density=True)
-x = hist[1][:-1]+(hist[1][1]-hist[1][0])/2
-# Step 3: Fit the model to the data
-p0 = [0, 10, 0.5, 1, 0]  # initial guesses: mu, width, sigma
-popt, pcov = curve_fit(convolved_pdf, x, hist[0], p0=p0, maxfev=5000)
-# mu_fit, width_fit, sigma_fit = popt
-perr = np.sqrt(np.diag(pcov))  # standard errors
-plt.plot(hist[1], convolved_pdf(hist[1], *popt), 'r-')
-print(popt)
+for ch in range(32):
+    hist = plt.hist(rdf.hodoOdLE[(rdf.hodoOdLE > -20) & (rdf.hodoOdLE < 20) & (rdf.channel == ch)], 100, range=(-20,20), density=True)
+    x = hist[1][:-1]+(hist[1][1]-hist[1][0])/2
+    # Step 3: Fit the model to the data
+    p0 = [0, 10, 0.5, 1, 0]  # initial guesses: mu, width, sigma
+    popt, pcov = curve_fit(convolved_pdf, x, hist[0], p0=p0, maxfev=5000)
+    # mu_fit, width_fit, sigma_fit = popt
+    perr = np.sqrt(np.diag(pcov))  # standard errors
+    plt.plot(hist[1], convolved_pdf(hist[1], *popt), 'r-')
+    plt.show()
+    print(popt)
 
 
 def compute_z_positions_from_dLE(df, dLE_col, num_channels=32, fit_range=(-20, 20), z_min=-225, z_max=225, ci_level=0.95, plot=False):
@@ -223,7 +228,7 @@ def compute_z_positions_from_dLE(df, dLE_col, num_channels=32, fit_range=(-20, 2
             plt.hist(dat, bins=80, range=fit_range, density=True,  label=f"ch {ch}")
             x = np.linspace(*fit_range, 500)
             # plt.plot(x, norm.pdf(x, mu, sigma), label=f"Fit ch {ch}")
-            plt.plot(x, convolved_pdf(x, mu, width, sigma, A, B), label=f"Fit ch {ch}")
+            plt.plot(x, convolved_pdf(x, mu, width, sigma, A, B), label=rf"Fit ch {ch} $\sigma$ = {sigma:.2f} mm")
             plt.axvline(ci[0], color="gray")
             plt.axvline(ci[1], color="gray")
             plt.legend()

@@ -74,10 +74,10 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
         # min_angle = np.nanmin(angles) if len(angles) else np.nan
         # max_angle = np.nanmax(angles) if len(angles) else np.nan
 
-        # 3. Mean |dz| component (verticality)
+        # 2. Mean |dz| component (verticality)
         mean_abs_dz = np.mean(np.abs(dirs[:, 2]))
 
-        # 4. Vertex position and distance to BGO
+        # 3. Vertex position and distance to BGO
         if "Vx" in ev.columns and ev["Vx"].notna().any():
             vertex = np.nanmean(ev[["Vx", "Vy", "Vz"]].dropna().to_numpy(), axis=0)
             vertex_rms = np.nanstd(ev[["Vx", "Vy", "Vz"]].dropna().to_numpy(), axis=0).mean()
@@ -87,7 +87,7 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
             vertex_rms = np.nan
             dist_to_bgo = np.nan
         
-        # 5. Timing spread based on LE times across all detectors
+        # 4. Timing spread based on LE times across all detectors
         if any(col in ev.columns for col in ["LE_Us", "LE_Ds", "LE"]):
             le_all = []
 
@@ -117,9 +117,9 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
         else:
             dt = dt_min = dt_max = dt_mean = np.nan
 
-        # 6. hodoO Δt for opposite track pairs (angle ~180°)
+        # 5. Pairwise angular distribution and 
+        # hodoO Δt for opposite track pairs (angle ~180°)
         opp_track_dt = np.nan
-
         opp_threshold = 160  # degrees
 
         # Need track_ids aligned with dirs array
@@ -164,14 +164,16 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
         if len(opp_dts) > 0:
             opp_track_dt = np.min(opp_dts)  # or max/mean depending on your choice
 
-
-        # Check if trigger condition is fulfilled
+        # 6. Check if trigger condition is fulfilled
         has_bgo = ev.loc[ev.detector == "bgo", "LE"].notna().any()
+        bgo_count = len(ev.loc[ev.detector == "bgo", "LE"].notna())
         trigger_condition = has_bgo and hodo_valid_hits(ev, "hodoO") and hodo_valid_hits(ev, "hodoI")
 
-
         if "Hbar_BG" in ev.columns:
-            Hbar = ev.Hbar_BG.unique()[0] == "Hbar"
+            what = ev.Hbar_BG.unique()[0]
+            Hbar = what == "Hbar"
+            
+            Anni = [0.9 if what == "Hbar" else 1 if what == "pbar" else 0]
         else:
             Hbar = ev.mixGate.unique()[0]
 
@@ -179,6 +181,7 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
             "event": event_id,
             "cusp": ev.cuspRunNumber.unique()[0],
             "n_tracks": n_tracks,
+            "n_bgo": bgo_count,
             "mean_angle": mean_angle,
             "min_angle": min_angle,
             "max_angle": max_angle,
@@ -198,6 +201,7 @@ def compute_event_features_from_clustered_hits(clustered_hits, bgo_center=(0, 0,
             "bgoEdep": ToT_to_E(ev.bgoToT.sum(), params=params),
             "mix": ev.mixGate.unique()[0],
             "Hbar": Hbar,
+            "Annihilation": Anni[0],
             "trigger": trigger_condition,
             "vertex": ~np.any(np.isnan(vertex))
         })

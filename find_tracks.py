@@ -221,7 +221,7 @@ def cluster_by_phi_uncertainty(event_hits, base_eps=1.0, min_samples=2, theta_we
 
         # Optionally include z for separation along barrel
         z = event_hits["z_used"].to_numpy() if "z_used" in event_hits.columns else event_hits["z"].to_numpy()
-        s_z = event_hits.get("dz", np.zeros_like(z)).to_numpy()
+        s_z = event_hits["dz_used"].to_numpy() if "dz_used" in event_hits.columns else event_hits["dz"].to_numpy()
 
         dists = np.zeros((n, n), dtype=float)
         for i in range(n):
@@ -247,6 +247,138 @@ def cluster_by_phi_uncertainty(event_hits, base_eps=1.0, min_samples=2, theta_we
     # DBSCAN on precomputed angular distance
     db = DBSCAN(eps=base_eps, min_samples=min_samples, metric="precomputed")
     labels = db.fit_predict(dists)
+    return labels
+
+
+def cluster_by_phi_layer_uncertainty(event_hits,
+                               base_eps=1.0,
+                               min_samples=2,
+                               z_weight_same=1.0,
+                               z_weight_diff=0.1,
+                               sigma_floor_deg=0.5,
+                               coords="cylindrical"):
+    """
+    Cluster hits by φ with uncertainty weighting.
+    z contribution is stronger for hits on the same layer.
+    """
+
+    if len(event_hits) == 0:
+        return np.array([], dtype=int)
+
+    n = len(event_hits)
+
+    # Extract layer info
+    layers = event_hits["layer"].to_numpy()   # "inner" / "outer"
+
+    if coords == "cylindrical":
+
+        # angles + uncertainties
+        ang = compute_angles_and_uncertainties(event_hits)
+        phi = ang["phi"]
+        s_phi = np.maximum(ang["sigma_phi"], np.deg2rad(sigma_floor_deg))
+
+        # z + uncertainties
+        z = (
+            event_hits["z_used"].to_numpy()
+            if "z_used" in event_hits.columns else
+            event_hits["z"].to_numpy()
+        )
+        s_z = (
+            event_hits["dz_used"].to_numpy()
+            if "z_used" in event_hits.columns else
+            event_hits["dz"].to_numpy()
+        )
+        s_z = np.maximum(s_z, 1e-9)
+
+        # Precompute layer-based z weights
+        # w_z[i,j] = z_weight_same if layers match else z_weight_diff
+        same_layer = (layers[:, None] == layers[None, :])
+        w_z = np.where(same_layer, z_weight_same, z_weight_diff)
+
+        # Allocate distance matrix
+        dists = np.zeros((n, n), dtype=float)
+
+        # Compute metric
+        for i in range(n):
+
+            dphi = delta_phi(phi[i], phi)
+            dz   = z[i] - z
+
+            denom_phi = s_phi[i]**2 + s_phi**2
+            denom_z   = s_z[i]**2   + s_z**2
+
+            # distance^2
+            d2 = (dphi*dphi) / denom_phi + \
+                 w_z[i] * (dz*dz) / denom_z
+
+            dists[i] = np.sqrt(d2)
+
+    else:
+        raise ValueError(f"Unknown coords mode: {coords}")
+
+    # Run DBSCAN
+    db = DBSCAN(eps=base_eps, min_samples=min_samples, metric="precomputed")
+    return db.fit_predict(dists)
+
+
+def cluster_by_sin_cos_phi_uncertainty(event_hits, base_eps=1.0, min_samples=2, z_weight=0.1, sigma_floor_deg=0.5):
+    """
+    Cluster hits mainly by φ (azimuth) with uncertainty weighting.
+    θ differences are included with reduced weight.
+    """
+    if len(event_hits) == 0:
+        return np.array([], dtype=int)
+    
+    n = len(event_hits)
+    # compute angles + uncertainties
+    ang = compute_angles_and_uncertainties(event_hits)
+    phi = ang["phi"]
+    s_phi = ang["sigma_phi"]
+
+    # Optionally include z for separation along barrel
+    z = event_hits["z_used"].to_numpy() if "z_used" in event_hits.columns else event_hits["z"].to_numpy()
+    s_z = event_hits.get("dz_used", np.zeros_like(z)).to_numpy()
+
+# Convert sigma floor to radians
+    sigma_floor = np.deg2rad(sigma_floor_deg)
+    sigma_phi = np.maximum(s_phi, sigma_floor)
+
+    # --- Transform to circular embedding ---
+    x = np.cos(phi)
+    y = np.sin(phi)
+
+    # Uncertainty propagation: sigma_x = |dx/dphi| * sigma_phi = |sin(phi)| * sigma_phi
+    sigma_x = np.abs(np.sin(phi)) * sigma_phi
+    sigma_y = np.abs(np.cos(phi)) * sigma_phi
+
+    # Floors for stability
+    sigma_x = np.maximum(sigma_x, 1e-6)
+    sigma_y = np.maximum(sigma_y, 1e-6)
+    sigma_z = np.maximum(s_z, 1e-6)
+
+    # --- Precompute distance matrix ---
+    dmat = np.zeros((n, n), dtype=float)
+
+    # Vectorized computation
+    for i in range(n):
+        dx = x[i] - x
+        dy = y[i] - y
+        dz = z[i] - z
+
+        denom_x = sigma_x[i]**2 + sigma_x**2
+        denom_y = sigma_y[i]**2 + sigma_y**2
+        denom_z = sigma_z[i]**2 + sigma_z**2
+
+        dmat[i, :] = np.sqrt(
+            (dx*dx)/denom_x +
+            (dy*dy)/denom_y +
+            z_weight * (dz*dz)/denom_z
+        )
+
+    # --- Run DBSCAN ---
+    db = DBSCAN(eps=base_eps, min_samples=min_samples, metric='precomputed')
+    labels = db.fit_predict(dmat)
+
     return labels
 
 def cluster_by_phi_hdbscan(event_hits, min_cluster_size=2, min_samples=1, theta_weight=0.1, sigma_floor_deg=0.5, coords="cylindrical"):

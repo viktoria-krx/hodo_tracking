@@ -74,6 +74,9 @@ def reconstruct_bar_z(df, detector, outer_or_inner):
     ci = np.array(stats["ci"])  # shape: (N_channels, 2)
     z_min, z_max = (-225, 225) if outer_or_inner == "outer" else (-150, 150)
 
+    sigma = np.array(stats["sigma"])
+    width = np.array(stats["width"])
+
     # ΔLE = LE_Us - LE_Ds
     dLE = df[f"{detector}UsLE"] - df[f"{detector}DsLE"]
     channels = df["channel"]
@@ -87,11 +90,16 @@ def reconstruct_bar_z(df, detector, outer_or_inner):
     ci0 = ci[channels, 0]
     ci1 = ci[channels, 1]
 
+    # Compute dz
+    dz = sigma[channels]*5 + width[channels]
+
     # Compute z
     z = (dLE - ci0) / (ci1 - ci0) * (z_max - z_min) + z_min
-    # print(len(z))
-    z[np.abs(z) > (z_max + 5)] = np.nan
-    return z
+    cutoff = np.abs(z) > (z_max + dz)
+    z[cutoff] = np.nan
+    dz[cutoff] = np.nan  
+
+    return z, dz
 
 # tic = time.perf_counter()
 
@@ -159,7 +167,7 @@ def build_hits_df(root_path, geometry_path="./geometry_files/geometry.json", ci_
             df_det = df[[le_us_col, le_ds_col, "channel", "event"]][df.channel < 32].dropna(how="all")
             # df_det = df[[le_us_col, le_ds_col, tot_us_col, tot_ds_col, "channel", "event"]].dropna(how="all")
 
-            z_reco = reconstruct_bar_z(df_det.copy(), det, outer_or_inner)
+            z_reco, dz_reco = reconstruct_bar_z(df_det.copy(), det, outer_or_inner)
 
             for i, row in df_det.iterrows():
                 geom = _GEOMETRY_CACHE["outer_bars" if outer_or_inner == "outer" else "inner_bars"].get(int(row["channel"]))
@@ -327,7 +335,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
                 df_det[col] = df_det[col] - df_det["trg_val"]
 
         # Vectorized z reconstruction
-        z_reco = reconstruct_bar_z(df_det.copy(), det, outer_or_inner)
+        z_reco, dz_reco = reconstruct_bar_z(df_det.copy(), det, outer_or_inner)
 
         # Get geometry dataframe for this detector
         geom_key = "outer_bars" if outer_or_inner == "outer" else "inner_bars"
@@ -347,6 +355,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 
         # print(det, len(df_det), len(z_reco))
         df_det["z_reco"] = z_reco
+        df_det["dz_reco"] = dz_reco
         # df_det["z"] = np.where(np.isnan(z_reco), df_det["z_geom"], z_reco)
         df_det["layer"] = outer_or_inner
         df_det["detector"] = det
@@ -370,7 +379,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         df_det.rename(columns={le_us_col: "LE_Us", le_ds_col: "LE_Ds", te_us_col: "TE_Us", te_ds_col: "TE_Ds"}, inplace=True)
         hits_list.append(df_det[[
             "event", "detector", "layer", "channel", "fpgaTimeTag", "mixGate", "cuspRunNumber",
-            "x", "y", "z", "z_reco", "dx", "dy", "dz",
+            "x", "y", "z", "z_reco", "dx", "dy", "dz", "dz_reco",
             "LE_Us", "LE_Ds", "TE_Us", "TE_Ds", "LE", "TE", "trg_val"
         ]])
 

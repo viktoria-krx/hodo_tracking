@@ -36,6 +36,8 @@ from sklearn.exceptions import UndefinedMetricWarning
 warnings.filterwarnings("ignore", message="R\^2 score is not well-defined")
 plt.style.use("asacusa.mplstyle")
 
+plot=True
+
 root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_000636.root" # cosmics
 root_path = "~/Documents/Hodoscope/cern_data/2025_Data/output_001825_6567.root" # cosmics
 
@@ -50,9 +52,12 @@ Hbardf = build_hits_df_from_runs(run_list, version="cusp_run")
 Hbardf["Hbar_BG"] = ["Hbar" if m == True else "BG" for m in Hbardf["mixGate"]]
 Hbardf.loc[:, "event"] = Hbardf["event"] + max_ev
 
-hits_df = pd.concat([BGdf, Hbardf], ignore_index=True)
+# hits_df = pd.concat([BGdf, Hbardf], ignore_index=True)
+hits_df = pd.concat([BGdf[BGdf.event <= 5000], Hbardf], ignore_index=True)
+# hits_df = Hbardf
 
 hits_df["z_used"] = np.where(np.isnan(hits_df["z_reco"]), hits_df["z"], hits_df["z_reco"])
+hits_df["dz_used"] = np.where(np.isnan(hits_df["dz_reco"]), hits_df["dz"], hits_df["dz_reco"])
 hits_df["bgoToT"] = hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna()& (hits_df["LE"] < hits_df["TE"])]["TE"] - hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna() & (hits_df["LE"] < hits_df["TE"])]["LE"]
 
 
@@ -79,8 +84,8 @@ for event_id, ev in hits_df[hits_df.LE < 0].groupby("event"):
 clustered_hits = pd.concat(clustered_list, ignore_index=True)
 
 
-lines_df = fit_lines_from_clusters_svd(clustered_hits, include_bgo=True,
-                                        prefilter_ransac=True, ransac_thresh=15.0, weighted=True, weight_col="dz")
+lines_df = fit_lines_from_clusters_svd(clustered_hits, include_bgo=False, 
+                                       use_xyz_errors=True, xyz_error_cols=["dx", "dy", "dz_used"], prefilter_ransac=False, ransac_thresh=15.0, weighted=False, weight_col="dz_used")
 
 vertices_df = reconstruct_vertex_from_midpoints(clustered_hits, lines_df,
                                             bgo_radius=45.0, 
@@ -92,10 +97,25 @@ lines_df = lines_df.merge(vertices_df, on="event", how="left")
 
 clustered_hits = clustered_hits.merge(lines_df, on=["event", "track_id"], how="left")
 
+plot_events(clustered_hits, lines_df, clustered_hits[clustered_hits.mixGate].event.unique()[:30])
+
 event_features_df = compute_event_features_from_clustered_hits(
     clustered_hits,
     bgo_center=(0, 0, 0)
 )
+
+run_feats = set(["event", "cusp", "time", "mix", "Hbar"])
+all_feats = [ele for ele in event_features_df.columns if ele not in run_feats]
+ML_feats = [ele for ele in event_features_df.columns if ele not in set(["vertex", "trigger"])]
+
+for feat in all_feats:
+    plt.hist([event_features_df[event_features_df.Hbar][feat].values, event_features_df[~event_features_df.Hbar][feat].values], bins=100, stacked=True, label=["Mixing", "BG"])
+    plt.legend()
+    plt.xlabel(feat)
+    plt.show()
+
+
+# plot_events(clustered_hits, lines_df, event_features_df[event_features_df.n_tracks > 8].event)
 
 border_event = BGdf.event.max()
 
@@ -216,6 +236,54 @@ plt.show()
 plt.hist([event_features_df[event_features_df.Hbar].opp_track_dt, event_features_df[~event_features_df.Hbar].opp_track_dt], bins=np.arange(50), stacked=True, label=["Hbar", "Background"])
 plt.xlabel("Opposite track dt [ns]")
 plt.legend()
+plt.show()
+
+plt.hist2d(event_features_df.n_tracks, event_features_df.bgoEdep, bins=(np.arange(1, 20), y_bins), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("BGO E dep [MeV]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Everything")
+plt.show()
+
+plt.hist2d(event_features_df[event_features_df.Hbar].n_tracks, event_features_df[event_features_df.Hbar].bgoEdep, bins=(np.arange(1, 20), y_bins), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("BGO E dep [MeV]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Hbar Candidates")
+plt.show()
+
+plt.hist2d(event_features_df[~event_features_df.Hbar].n_tracks, event_features_df[~event_features_df.Hbar].bgoEdep, bins=(np.arange(1, 20), y_bins), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("BGO E dep [MeV]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Background")
+plt.show()
+
+plt.hist2d(event_features_df.n_tracks, event_features_df.mean_angle, bins=(np.arange(1, 20), np.linspace(0, 180, 19)), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("Mean inter-track angle [°]")
+# plt.yscale("log")
+plt.colorbar()
+plt.title("Everything")
+plt.show()
+
+plt.hist2d(event_features_df[event_features_df.Hbar].n_tracks, event_features_df[event_features_df.Hbar].mean_angle, bins=(np.arange(1, 20), np.linspace(0, 180, 19)), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("Mean inter-track angle [°]")
+# plt.yscale("log")
+plt.colorbar()
+plt.title("Hbar Candidates")
+plt.show()
+
+plt.hist2d(event_features_df[~event_features_df.Hbar].n_tracks, event_features_df[~event_features_df.Hbar].mean_angle, bins=(np.arange(1, 20), np.linspace(0, 180, 19)), norm="log")
+plt.xlabel("n tracks")
+plt.ylabel("Mean inter-track angle [°]")
+# plt.yscale("log")
+plt.colorbar()
+plt.title("Background")
 plt.show()
 
 
@@ -750,6 +818,7 @@ results_opt.append(random_forest(X_train, y_train, X_test, y_test, cols, **best_
 results_opt.append(xgboost_model(X_train, y_train, X_test, y_test, cols, **best_params_xgb))
 results_opt.append(xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, cols, **best_params_xgb_nan))
 
+xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, cols, **best_params_xgb_nan, plot=True)
 
 results_opt_df = pd.DataFrame(results_opt)
 print(results_opt_df)
