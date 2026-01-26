@@ -47,7 +47,14 @@ BGdf["Hbar_BG"] = "BG"
 
 max_ev = BGdf["event"].max()
 
-run_list = np.concatenate([np.arange(1705, 1721), np.arange(1724, 1730)])
+rand_list = pd.read_csv("../cern_data/2025_Data/random_run_list.csv", sep=", ")
+rand_list.sort_values("cusp", inplace=True)
+rand_list.reset_index(drop=True, inplace=True)
+print(rand_list)
+
+run_list = rand_list.hodo.values
+
+# run_list = np.concatenate([np.arange(1705, 1721), np.arange(1724, 1730)])
 Hbardf = build_hits_df_from_runs(run_list, version="cusp_run")
 Hbardf["Hbar_BG"] = ["Hbar" if m == True else "BG" for m in Hbardf["mixGate"]]
 Hbardf.loc[:, "event"] = Hbardf["event"] + max_ev
@@ -61,9 +68,37 @@ hits_df["dz_used"] = np.where(np.isnan(hits_df["dz_reco"]), hits_df["dz"], hits_
 hits_df["bgoToT"] = hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna()& (hits_df["LE"] < hits_df["TE"])]["TE"] - hits_df[(hits_df["detector"] == "bgo") & hits_df["LE"].notna() & hits_df["TE"].notna() & (hits_df["LE"] < hits_df["TE"])]["LE"]
 
 
+params = {
+    "eps": [0.8],                            
+    "zweight_same": [1], 
+    "zweight_diff": [0],  
+    "weight_power": [0.5], #[0.25, 0.5, 0.75],
+    "weight_power_z": [0.85], #[0.7, 0.8, 0.85, 0.9], #[0.75, 0.8, 0.9, 1],
+    "dist_bgo": [300],
+    "vertex_cluster": [True],
+    "vertex_eps": [200], #, 300, 400], #[50, 100, 150, 200, 250, 300, 350, 400],
+    "vertex_alpha": [100] #[1, 10, 50, 100]
+}
+
+import json
+with open('vertex_params.json', 'w') as fp:
+    json.dump(params, fp)
+
+
+eps = params["eps"][0]
+z_w_same = params["zweight_same"][0]
+z_w_diff = params["zweight_diff"][0]
+w_pow = params["weight_power"][0]
+w_pow_z = params["weight_power_z"][0]
+dist_bgo = params["dist_bgo"][0]
+vertex_cluster = params["vertex_cluster"][0]
+vertex_eps = params["vertex_eps"][0]
+vertex_alpha = params["vertex_alpha"][0]
+
 clustered_list = []
 for event_id, ev in hits_df[hits_df.LE < 0].groupby("event"):
     ev["det_key"] = ev["detector"] + "_" + ev["channel"].astype(str)
+
     # select only hodo/tile hits for clustering
     ev_ht = ev[ev.detector.isin(["hodoO","hodoI","tileO","tileI"])].copy()
     if ev_ht.empty:
@@ -71,8 +106,15 @@ for event_id, ev in hits_df[hits_df.LE < 0].groupby("event"):
         clustered_list.append(ev)
         continue
 
-    labels = cluster_by_phi_uncertainty(ev_ht, base_eps=1, min_samples=2, theta_weight=0.2, coords="cylindrical")
-    # labels = cluster_by_phi_hdbscan(ev_ht, min_samples=2, theta_weight=0, coords="cylindrical")
+    labels = cluster_by_phi_layer_uncertainty(ev_ht,
+            base_eps=eps,
+            min_samples=2,
+            z_weight_same=z_w_same,
+            z_weight_diff=z_w_diff,
+            sigma_floor_deg=0.5,
+            coords="cylindrical")
+    
+    # labels = cluster_by_phi_uncertainty(ev_ht, base_eps=eps, min_samples=2, theta_weight=th_w, coords="cylindrical")
     ev_ht["track_id"] = labels
 
     # merge labels back into the full event (bgo keep -1)
@@ -81,32 +123,49 @@ for event_id, ev in hits_df[hits_df.LE < 0].groupby("event"):
 
     clustered_list.append(ev)
 
+print("clustering done")
+
 clustered_hits = pd.concat(clustered_list, ignore_index=True)
 
+print(f"{clustered_hits[(clustered_hits.track_id > -1)].groupby('event').ngroups} of {hits_df.groupby('event').ngroups} events have at least one cluster\t {clustered_hits[(clustered_hits.track_id > -1)].groupby('event').ngroups/hits_df.groupby('event').ngroups*100:.2f}%")
 
-lines_df = fit_lines_from_clusters_svd(clustered_hits, include_bgo=False, 
-                                       use_xyz_errors=True, xyz_error_cols=["dx", "dy", "dz_used"], prefilter_ransac=False, ransac_thresh=15.0, weighted=False, weight_col="dz_used")
+print(f"{clustered_hits[(clustered_hits.z_used != 0)].groupby(['event']).ngroups} of {hits_df.groupby('event').ngroups} events have at least one track\t {clustered_hits[(clustered_hits.z_used != 0)].groupby(['event']).ngroups/hits_df.groupby('event').ngroups*100:.2f}%")
 
-vertices_df = reconstruct_vertex_from_midpoints(clustered_hits, lines_df,
-                                            bgo_radius=45.0, 
-                                            max_dist_to_bgo=25.0)
 
+_lines_df = fit_lines_from_clusters_svd(clustered_hits, include_bgo=False, 
+                                    use_xyz_errors=True, xyz_error_cols=["dx", "dy", "dz_used"], weight_power=w_pow, weight_power_z=w_pow_z, prefilter_ransac=False, ransac_thresh=15.0, weighted=False, weight_col="dz_used")
+
+print("line fitting done")
+
+
+vertices_df = reconstruct_vertex_from_midpoints(clustered_hits, _lines_df,
+                                        bgo_radius=45.0, 
+                                        max_dist_to_bgo=dist_bgo, 
+                                        cluster_mids=vertex_cluster, cluster_eps=vertex_eps, cluster_alpha=vertex_alpha)#25.0)
+
+print("vertex reconstruction done")
+
+print(f"{vertices_df.groupby('event').ngroups} of {hits_df.groupby('event').ngroups} events have a reconstructed vertex\t {vertices_df.groupby('event').ngroups/hits_df.groupby('event').ngroups*100:.2f}%")
+
+print(f"{vertices_df[(vertices_df.Vz != 0)].groupby(['event']).ngroups} of {hits_df.groupby('event').ngroups} events have a reconstructed non-zero vertex\t {vertices_df[(vertices_df.Vz != 0)].groupby(['event']).ngroups/hits_df.groupby('event').ngroups*100:.2f}%")
 
 # vertices_df = find_vertices_from_tracks(lines_df, eps=5.0)
-lines_df = lines_df.merge(vertices_df, on="event", how="left")
+lines_df = _lines_df.merge(vertices_df, on="event", how="left")
 
 clustered_hits = clustered_hits.merge(lines_df, on=["event", "track_id"], how="left")
 
-plot_events(clustered_hits, lines_df, clustered_hits[clustered_hits.mixGate].event.unique()[:30])
+plot_events(clustered_hits, lines_df, clustered_hits[clustered_hits.Hbar_BG == "pbar"].event.unique()[:30])
 
 event_features_df = compute_event_features_from_clustered_hits(
     clustered_hits,
     bgo_center=(0, 0, 0)
 )
 
+print("event features done")
+
 run_feats = set(["event", "cusp", "time", "mix", "Hbar"])
 all_feats = [ele for ele in event_features_df.columns if ele not in run_feats]
-ML_feats = [ele for ele in event_features_df.columns if ele not in set(["vertex", "trigger"])]
+ML_feats = [ele for ele in event_features_df.columns if ele not in set(["vertex", "trigger", "mix", "time", "cusp", "event", "Hbar", "Annihilation"])]
 
 for feat in all_feats:
     plt.hist([event_features_df[event_features_df.Hbar][feat].values, event_features_df[~event_features_df.Hbar][feat].values], bins=100, stacked=True, label=["Mixing", "BG"])
@@ -169,7 +228,8 @@ plt.xlabel("Mean inter-track angle [°]")
 plt.ylabel("BGO ToT sum [ns]")
 plt.yscale("log")
 plt.colorbar()
-plt.title("Hbar Candidates")
+plt.title("During Mixing")
+plt.savefig("intertrackangle_totsum_mixing.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
 # plt.colorbar(label="Min inter-track angle [°]")
 plt.show()
 
@@ -181,7 +241,8 @@ plt.xlabel("Mean inter-track angle [°]")
 plt.ylabel("BGO ToT sum [ns]")
 plt.yscale("log")
 plt.colorbar()
-plt.title("Background")
+plt.title("Outside Mixing/Background")
+plt.savefig("intertrackangle_totsum_background.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
 # plt.colorbar(label="Min inter-track angle [°]")
 plt.show()
 
@@ -193,7 +254,8 @@ plt.xlabel("Mean inter-track angle [°]")
 plt.ylabel("BGO ToT sum [ns]")
 plt.yscale("log")
 plt.colorbar()
-plt.title("Everything")
+plt.title("Outside Mixing/Background")
+plt.savefig("intertrackangle_totsum_anytime.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
 # plt.colorbar(label="Min inter-track angle [°]")
 plt.show()
 
@@ -291,16 +353,18 @@ plt.show()
 
 
 
-cols = ['n_tracks', 'mean_angle', 'min_angle', 'max_angle', 'vertex_x', 'vertex_y', 'vertex_z', 'dist_to_bgo', 'dt', 'dt_max', 'dt_min', 'dt_mean', 'bgoToTSum', 'bgoEdep']#, 'opp_track_dt']
+# cols = ['n_tracks', 'mean_angle', 'min_angle', 'max_angle', 'vertex_x', 'vertex_y', 'vertex_z', 'dist_to_bgo', 'dt', 'dt_max', 'dt_min', 'dt_mean', 'bgoToTSum', 'bgoEdep']#, 'opp_track_dt']
+
+ML_feats_notna = [ele for ele in ML_feats if ele != "opp_track_dt"]
 
 # Most models can't handle NaN values
 evs = np.array(event_features_df[event_features_df.vertex]["event"])
-X = np.array(event_features_df[event_features_df.vertex][cols])
+X = np.array(event_features_df[event_features_df.vertex][ML_feats_notna])
 y = np.array(event_features_df[event_features_df.vertex]["Hbar"])
 # y = y * 0.9
 
 evsnan = np.array(event_features_df["event"])
-Xnan = np.array(event_features_df[cols])
+Xnan = np.array(event_features_df[ML_feats])
 ynan = np.array(event_features_df["Hbar"])
 # ynan = ynan * 0.9
 
@@ -438,19 +502,21 @@ models = ["Logistic Regression", "PCA + Logistic Regression", "Linear Regression
 
 results = []
 
-results.append(logistic_regression(X_train, y_train, X_test, y_test, cols))
-results.append(pca_logistic_regression(X_train, y_train, X_test, y_test, cols))
-results.append(linear_regression(X_train, y_train, X_test, y_test, cols))
-results.append(decision_tree(X_train, y_train, X_test, y_test, cols))
-results.append(random_forest(X_train, y_train, X_test, y_test, cols))
-results.append(xgboost_model(X_train, y_train, X_test, y_test, cols))
-results.append(xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, cols))
+results.append(logistic_regression(X_train, y_train, X_test, y_test, ML_feats))
+results.append(pca_logistic_regression(X_train, y_train, X_test, y_test, ML_feats))
+results.append(linear_regression(X_train, y_train, X_test, y_test, ML_feats))
+results.append(decision_tree(X_train, y_train, X_test, y_test, ML_feats))
+results.append(random_forest(X_train, y_train, X_test, y_test, ML_feats))
+results.append(xgboost_model(X_train, y_train, X_test, y_test, ML_feats))
+xgb_nan_results = xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, ML_feats)
+xgb_nan_results["model"] = "XGBoost_NaN"
+results.append(xgb_nan_results)
 
 
 results_df = pd.DataFrame(results)
 print(results_df)
 
-results_df.plot(
+results_df[results_df.model != "XGBoost_NaN"].plot(
     x="model", 
     y=["AUC", "Precision", "Recall", "F1"],
     kind="bar",
@@ -460,6 +526,8 @@ results_df.plot(
 plt.xticks(rotation=15)
 plt.tight_layout()
 plt.legend(loc="lower center", ncols=4)
+plt.ylim(0,1)
+plt.savefig("ML_model_comparison_preopt.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
 plt.show()
 
 #### Hyperparameter Optimization
@@ -524,7 +592,7 @@ y_probs = best_lr.predict_proba(X_test)[:, 1]
 # print("AUC:", roc_auc_score(y_test, y_probs))
 
 evaluate_model(y_test, y_pred, y_probs, "Optimized Logistic Regression")
-plot_importance(abs(best_lr.coef_[0]), cols, "Optimized Logistic Regression Coefficients")
+plot_importance(abs(best_lr.coef_[0]), ML_feats_notna, "Optimized Logistic Regression Coefficients")
 
 ### PCA + Logistic Regression
 
@@ -642,7 +710,7 @@ y_pred = best_dt.predict(X_test)
 y_probs = best_dt.predict_proba(X_test)[:, 1]
 
 evaluate_model(y_test, y_pred, y_probs, "Optimized Decision Tree")
-plot_importance(abs(best_dt.feature_importances_), cols, "Optimized Decision Tree Coefficients")
+plot_importance(abs(best_dt.feature_importances_), ML_feats_notna, "Optimized Decision Tree Coefficients")
 
 
 
@@ -699,7 +767,7 @@ y_pred = best_rf.predict(X_test)
 y_probs = best_rf.predict_proba(X_test)[:, 1]
 
 evaluate_model(y_test, y_pred, y_probs, "Optimized Random Forest")
-plot_importance(abs(best_rf.feature_importances_), cols, "Optimized Random Forest Coefficients")
+plot_importance(abs(best_rf.feature_importances_), ML_feats_notna, "Optimized Random Forest Coefficients")
 
 
 
@@ -751,7 +819,7 @@ y_pred = best_xgb.predict(X_test)
 y_probs = best_xgb.predict_proba(X_test)[:, 1]
 
 evaluate_model(y_test, y_pred, y_probs, "Optimized XGBoost")
-plot_importance(abs(best_xgb.feature_importances_), cols, "Optimized XGBoost Coefficients")
+plot_importance(abs(best_xgb.feature_importances_), ML_feats_notna, "Optimized XGBoost Coefficients")
 
 
 
@@ -803,27 +871,37 @@ y_pred = best_xgb_nan.predict(Xnan_test)
 y_probs = best_xgb_nan.predict_proba(Xnan_test)[:, 1]
 
 evaluate_model(ynan_test, y_pred, y_probs, "Optimized XGBoost with NaN")
-plot_importance(abs(best_xgb_nan.feature_importances_), cols, "Optimized XGBoost with NaN Coefficients")
+plot_importance(abs(best_xgb_nan.feature_importances_), ML_feats, "Optimized XGBoost with NaN Coefficients")
 
+plt.figure(figsize=(8, 4))
+plt.bar(ML_feats, abs(best_xgb_nan.feature_importances_))
+plt.xticks(rotation=90)
+plt.ylabel("Feature importance")
+plt.title("Optimized XGBoost with NaN Coefficients")
+plt.tight_layout()
+plt.savefig("best_xgb_nan_feature_importance.png")
+plt.show()
 
-
+confusion_matrix(ynan_test, y_pred)/len(ynan_test)*100
 
 results_opt = []
 
-results_opt.append(logistic_regression(X_train, y_train, X_test, y_test, cols, **best_params_lr))
-results_opt.append(pca_logistic_regression(X_train, y_train, X_test, y_test, cols))
-results_opt.append(linear_regression(X_train, y_train, X_test, y_test, cols))
-results_opt.append(decision_tree(X_train, y_train, X_test, y_test, cols, **best_params_dt))
-results_opt.append(random_forest(X_train, y_train, X_test, y_test, cols, **best_params_rf))
-results_opt.append(xgboost_model(X_train, y_train, X_test, y_test, cols, **best_params_xgb))
-results_opt.append(xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, cols, **best_params_xgb_nan))
+results_opt.append(logistic_regression(X_train, y_train, X_test, y_test, ML_feats_notna, **best_params_lr))
+results_opt.append(pca_logistic_regression(X_train, y_train, X_test, y_test, ML_feats_notna))
+results_opt.append(linear_regression(X_train, y_train, X_test, y_test, ML_feats_notna))
+results_opt.append(decision_tree(X_train, y_train, X_test, y_test, ML_feats_notna, **best_params_dt))
+results_opt.append(random_forest(X_train, y_train, X_test, y_test, ML_feats_notna, **best_params_rf))
+results_opt.append(xgboost_model(X_train, y_train, X_test, y_test, ML_feats_notna, **best_params_xgb))
+optxgb_nan_results = xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, ML_feats, **best_params_xgb_nan)
+optxgb_nan_results["model"] = "XGBoost_NaN"
+results_opt.append(optxgb_nan_results)
 
-xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, cols, **best_params_xgb_nan, plot=True)
+xgboost_model(Xnan_train, ynan_train, Xnan_test, ynan_test, ML_feats, **best_params_xgb_nan, plot=True)
 
 results_opt_df = pd.DataFrame(results_opt)
 print(results_opt_df)
 
-results_opt_df.plot(
+results_opt_df[results_opt_df["model"] != "XGBoost_NaN"].plot(
     x="model", 
     y=["AUC", "Precision", "Recall", "F1"],
     kind="bar",
@@ -833,6 +911,8 @@ results_opt_df.plot(
 plt.xticks(rotation=15)
 plt.tight_layout()
 plt.legend(loc="lower center", ncols=4)
+plt.ylim(0, 1)
+plt.savefig("ML_model_comparison.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
 plt.show()
 
 def proba_model(model, X, y):
@@ -850,6 +930,30 @@ probs_dt = proba_model(best_dt, X, y)
 probs_rf = proba_model(best_rf, X, y)
 probs_xgb = proba_model(best_xgb, X, y)
 probs_xgb_nan = proba_model(best_xgb_nan, Xnan, ynan)
+
+
+
+# import pickle
+# pickle.dump(best_xgb_nan, open("best_xgb_nan.pkl", 'wb'))
+
+
+def background_rejection_at_signal_eff(y_true, y_score, target_eff=0.5):
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    idx = np.argmin(np.abs(tpr - target_eff))
+    return 1 - fpr[idx]
+
+for target_eff in [0.5, 0.7, 0.8, 0.9]:
+    print(background_rejection_at_signal_eff(ynan[event_features_df.event > border_event], probs_xgb_nan[event_features_df.event > border_event], target_eff))
+
+plt.plot(np.linspace(0, 1, 20), [background_rejection_at_signal_eff(ynan[event_features_df.event > border_event], probs_xgb_nan[event_features_df.event > border_event], e) for e in np.linspace(0, 1, 20)])
+plt.xlabel("Signal efficiency")
+plt.ylabel("Background rejection")
+plt.tight_layout()
+plt.gca().set_aspect("equal")
+plt.savefig("background_rejection_Hbarruns.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
+plt.show()
+
+
 
 
 evs_notna = np.array(event_features_df[event_features_df.vertex_x.notna()]["event"])
@@ -1008,6 +1112,7 @@ ax[1].legend(fontsize=8)
 plt.tight_layout()
 plt.suptitle("All Runs", fontsize=16, y=0.98)
 fig.subplots_adjust(top=0.85)
+plt.savefig("roc_pr_all_runs.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
 plt.show()
 
 mask_vertex = event_features_df[event_features_df.event > border_event].vertex_x.notna().values
@@ -1051,7 +1156,57 @@ ax[1].legend(fontsize=8)
 plt.tight_layout()
 plt.suptitle("Hbar Runs", fontsize=16, y=0.98)
 fig.subplots_adjust(top=0.85)
+plt.savefig("roc_pr_Hbar_runs.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
 plt.show()
+
+
+
+fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+for name, col in models.items():
+    if name != "XGB_nan": continue
+    proba = event_features_df[event_features_df.event > border_event][col].values.copy()
+    
+    # For models that cannot produce a prediction when vertex is missing
+    if name != "XGB_nan":
+        # Assign conservative default proba = 0 where the model is not applicable
+        proba[~mask_vertex] = 0.0
+    
+    # Compute ROC
+    fpr, tpr, _ = roc_curve(y_true, proba)
+    auc_score = auc(fpr, tpr)
+
+    precision, recall, thresholds = precision_recall_curve(y_true, proba)
+    f_scores = (2 * precision * recall) / (precision + recall)
+
+
+    # Find the threshold with the maximal F-score
+    max_f_score_idx = np.argmax(f_scores)
+    max_f_score_threshold = thresholds[max_f_score_idx]
+
+    ax[0].plot(fpr, tpr, ".", label=f"{name} (AUC = {auc_score:.3f})")
+    ax[1].plot(recall, precision,".", label=f"{name} (F-score = {f_scores[max_f_score_idx]:.3f})")
+    ax[1].scatter(recall[max_f_score_idx], precision[max_f_score_idx], marker="x", color="black", zorder=5)#, label=f"{name} (F-score = {f_scores[max_f_score_idx]:.3f})")
+
+# Plot formatting
+ax[0].plot([0, 1], [0, 1], 'k--', linewidth=1)
+ax[1].plot([0, 1], [0.5, 0.5], 'k--', linewidth=1)
+ax[0].set_xlabel("False Positive Rate")
+ax[0].set_ylabel("True Positive Rate")
+ax[0].set_title("ROC Curve")
+ax[0].legend(fontsize=8)
+ax[1].set_xlabel("Recall")
+ax[1].set_ylabel("Precision")
+ax[1].set_title("Precision-Recall Curve")
+ax[1].legend(fontsize=8)
+plt.tight_layout()
+plt.suptitle("Hbar Runs", fontsize=16, y=0.98)
+fig.subplots_adjust(top=0.85)
+plt.savefig("roc_pr_Hbar_runs_xgb_nan.png", bbox_inches="tight", pad_inches=0.1, dpi=300)
+plt.show()
+
+
+
+
 
 
 
@@ -1279,6 +1434,31 @@ for th in np.arange(0.1, 1, 0.1):
 
 
 
+
+for th in np.arange(0.1, 1, 0.1):
+    y_bins = np.logspace(np.log10(5), np.log10(400), 40)
+    plt.hist2d(event_features_df[event_features_df.prob_Hbar_XGB_nan > th].mean_angle, event_features_df[event_features_df.prob_Hbar_XGB_nan > th].bgoEdep, bins=(x_bins, y_bins))
+    plt.xlabel("Mean inter-track angle [°]")
+    plt.ylabel("BGO E dep [MeV]")
+    plt.yscale("log")
+    plt.colorbar()
+    plt.title(f"Hbar Candidates (XGB prob. > {th})")
+    # plt.colorbar(label="Min inter-track angle [°]")
+    plt.show()
+
+    y_bins = np.logspace(np.log10(5), np.log10(400), 40)
+    plt.hist2d(event_features_df[event_features_df.prob_Hbar_XGB_nan < th].mean_angle, event_features_df[event_features_df.prob_Hbar_XGB_nan < th].bgoEdep, bins=(x_bins, y_bins))
+    plt.xlabel("Mean inter-track angle [°]")
+    plt.ylabel("BGO E dep [MeV]")
+    plt.yscale("log")
+    plt.colorbar()
+    plt.title(f"Background (XGB prob. < {th})")
+    # plt.colorbar(label="Min inter-track angle [°]")
+    plt.show()
+
+
+
+
 plt.hist([event_features_df.time[(event_features_df.event > border_event) & (event_features_df.Hbar)]*1e-9, event_features_df.time[(event_features_df.event > border_event) & (~event_features_df.Hbar)]*1e-9], bins=35, stacked=True, label=["Mixing", "BG"])
 plt.hist(event_features_df.time[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_RF > 0.5)]*1e-9, bins=35, histtype="step", label="Hbar RF prob > 0.5", lw=2)
 plt.legend()
@@ -1297,6 +1477,34 @@ plt.hist([event_features_df.time[(event_features_df.event > border_event) & (eve
 plt.hist(event_features_df.time[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_XGB_nan > 0.5)]*1e-9, bins=35, histtype="step", label="Hbar XGB NaN prob > 0.5", lw=2)
 plt.legend()
 plt.xlabel("Time in s")
+plt.savefig("signal_timing_proba.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.yscale("log")
+plt.show()
+
+
+plt.hist([event_features_df.time[(event_features_df.event > border_event) & (event_features_df.Hbar)]*1e-9, event_features_df.time[(event_features_df.event > border_event) & (~event_features_df.Hbar)]*1e-9], bins=35, stacked=True, label=["Mixing", "BG"], density=True)
+# plt.hist(event_features_df.time[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_XGB_nan > 0.5)]*1e-9, bins=35, histtype="step", label="Hbar XGB NaN prob > 0.5", lw=2)
+plt.legend()
+plt.xlabel("Time in s")
+plt.savefig("signal_timing.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.yscale("log")
+plt.show()
+
+
+event_features_df[(event_features_df.event > border_event)].event.nunique()
+
+event_features_df[(event_features_df.event > border_event) & (event_features_df.Hbar)].event.nunique()
+event_features_df[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_XGB_nan > 0.5)].event.nunique()
+
+event_features_df[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_XGB_nan > 0.5) & (event_features_df.Hbar)].event.nunique()
+
+
+
+plt.hist([event_features_df.time[(event_features_df.event > border_event) & (event_features_df.Hbar)]*1e-9, event_features_df.time[(event_features_df.event > border_event) & (~event_features_df.Hbar)]*1e-9], bins=35, stacked=True, label=["Mixing", "BG"])
+plt.hist(event_features_df.time[(event_features_df.event > border_event) & (event_features_df.prob_Hbar_XGB_nan > 0.8)]*1e-9, bins=35, histtype="step", label="Hbar XGB NaN prob > 0.8", lw=2)
+plt.legend()
+plt.xlabel("Time in s")
+plt.savefig("signal_timing_proba_80.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
 # plt.yscale("log")
 plt.show()
 
@@ -1322,7 +1530,7 @@ full_events = clustered_hits[triggercondition].groupby("event").count()
 plt.hist(event_features_df.time[event_features_df.cusp == 6453]*1e-9, bins=35, range=(0, 350))
 plt.show()
 
-plt.hist(event_features_df.time[(event_features_df.cusp == 6453) & (event_features_df.prob_Hbar_XGBnan > 0.5)]*1e-9, bins=35, range=(0, 350),histtype="step", label="XGB")
+plt.hist(event_features_df.time[(event_features_df.cusp == 6453) & (event_features_df.prob_Hbar_XGB_nan > 0.5)]*1e-9, bins=35, range=(0, 350),histtype="step", label="XGB")
 plt.hist(event_features_df.time[(event_features_df.cusp == 6453) & (event_features_df.prob_Hbar_RF > 0.5)]*1e-9, bins=35, range=(0, 350), histtype="step", label="RF")
 plt.legend()
 plt.xlabel("Time in s")
@@ -1400,6 +1608,102 @@ plt.show()
 
 
 
+
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 180, 18)
+plt.hist2d(event_features_df.mean_angle[event_features_df.prob_Hbar_XGB_nan > 0.5], event_features_df.bgoToTSum[event_features_df.prob_Hbar_XGB_nan > 0.5], bins=(x_bins, y_bins))
+plt.xlabel("Mean inter-track angle [°]")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Prob. > 0.5")
+plt.savefig("intertrackangle_totsum_prob_high.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 180, 18)
+plt.hist2d(event_features_df.mean_angle[event_features_df.prob_Hbar_XGB_nan <= 0.5], event_features_df.bgoToTSum[event_features_df.prob_Hbar_XGB_nan <= 0.5], bins=(x_bins, y_bins))
+plt.xlabel("Mean inter-track angle [°]")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Prob. <= 0.5")
+plt.savefig("intertrackangle_totsum_prob_low.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+
+
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 10, 11)
+plt.hist2d(event_features_df.n_tracks[event_features_df.prob_Hbar_XGB_nan > 0.5], event_features_df.bgoToTSum[event_features_df.prob_Hbar_XGB_nan > 0.5], bins=(x_bins, y_bins))
+plt.xlabel("Number of tracks")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Prob. > 0.5")
+plt.savefig("ntracks_totsum_prob_high.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 10, 11)
+plt.hist2d(event_features_df.n_tracks[event_features_df.prob_Hbar_XGB_nan <= 0.5], event_features_df.bgoToTSum[event_features_df.prob_Hbar_XGB_nan <= 0.5], bins=(x_bins, y_bins))
+plt.xlabel("Number of tracks")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Prob. <= 0.5")
+plt.savefig("ntracks_totsum_prob_low.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 10, 11)
+plt.hist2d(event_features_df.n_tracks[event_features_df.Hbar], event_features_df.bgoToTSum[event_features_df.Hbar], bins=(x_bins, y_bins))
+plt.xlabel("Number of tracks")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("During Mixing")
+plt.savefig("ntracks_totsum_prob_mixing.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 10, 11)
+plt.hist2d(event_features_df.n_tracks, event_features_df.bgoToTSum, bins=(x_bins, y_bins))
+plt.xlabel("Number of tracks")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Outside Mixing/Background")
+plt.savefig("ntracks_totsum_background.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+plt.show()
+
+y_bins = np.logspace(np.log10(10), np.log10(10000), 40)  # from 1 ns to 8000 ns
+x_bins = np.linspace(0, 10, 11)
+plt.hist2d(event_features_df.n_tracks, event_features_df.bgoToTSum, bins=(x_bins, y_bins))
+plt.xlabel("Number of tracks")
+plt.ylabel("BGO ToT sum [ns]")
+plt.yscale("log")
+plt.colorbar()
+plt.title("Anytime")
+plt.savefig("ntracks_totsum_prob_anytime.png", dpi=300, bbox_inches="tight", pad_inches=0.1)
+# plt.colorbar(label="Min inter-track angle [°]")
+plt.show()
+
+
+
+
+
 # plt.hist([event_features_df[event_features_df.Hbar].vertex_x, event_features_df[~event_features_df.Hbar].vertex_x], bins=50, stacked=False, label=["Hbar", "Background"], density=True, histtype="step")
 # plt.yscale("log")
 
@@ -1443,3 +1747,10 @@ plt.show()
 # plt.plot(fit_function(80, *popt))
 
 # lam = 1 / popt[1]
+
+
+
+plot_events(clustered_hits, lines_df, event_features_df[(event_features_df.Hbar) & (event_features_df.prob_Hbar_XGB_nan < 0.5)].event.unique()[:30])
+
+
+plot_events(clustered_hits, lines_df, event_features_df[(~event_features_df.Hbar) & (event_features_df.prob_Hbar_XGB_nan > 0.5)].event.unique()[:30])

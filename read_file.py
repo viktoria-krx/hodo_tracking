@@ -233,8 +233,8 @@ def build_hits_df(root_path, geometry_path="./geometry_files/geometry.json", ci_
 
 
 
-def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json", ci_path="./geometry_files/CI_z.json"):
-    tree = uproot.open(root_path)["RawEventTree"]
+def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json", ci_path="./geometry_files/CI_z.json", tree="RawEventTree"):
+    tree = uproot.open(root_path)[tree]
     branches = [
         "eventID", "fpgaTimeTag", "mixGate",
         "hodoODsLE", "hodoODsTE", "hodoOUsLE", "hodoOUsTE",
@@ -255,7 +255,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
     if "mixGate" in df.columns:
         df["mixGate"] = df.groupby("event")["mixGate"].transform("first")
 
-    print(df[df.channel < 4].trgLE)
+    # print(df[df.channel < 4].trgLE)
 
     def get_trg(row, tdc):
         try:
@@ -263,7 +263,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
         except Exception:
             return np.nan
 
-    print(df)
+    # print(df)
 
     # Preload geometry & calibration
     load_geometry(geometry_path)
@@ -296,7 +296,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
             trg_map[event] = valid_trg.set_index("channel")["trgLE"].to_dict()
         else:
             trg_map[event] = {}  # no triggers for this event
-    print(trg_map)
+    # print(trg_map)
 
     def get_trg_val(row, det):
         tdc = get_tdc(det, row["channel"])
@@ -470,7 +470,7 @@ def build_hits_df_fast(root_path, geometry_path="./geometry_files/geometry.json"
 def build_hits_df_from_runs(run_list, base_path="~/Documents/Hodoscope/cern_data/2025_Data/",
                             geometry_path="./geometry_files/geometry.json",
                             ci_path="./geometry_files/CI_z.json", 
-                            version="cusp_run"):
+                            version="cusp_run", tree="RawEventTree"):
     """
     Loads multiple ROOT files sequentially and builds one combined hits_df.
     Ensures event numbering continues across files (no resets to 0).
@@ -493,7 +493,7 @@ def build_hits_df_from_runs(run_list, base_path="~/Documents/Hodoscope/cern_data
         # build_hits_df_fast returns a dataframe with an 'event' column
         hits_df = build_hits_df_fast(str(root_path),
                                      geometry_path=geometry_path,
-                                     ci_path=ci_path)
+                                     ci_path=ci_path, tree=tree)
 
         # Apply the event offset
         hits_df["event"] = hits_df["event"] + cumulative_event_offset

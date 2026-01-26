@@ -1,0 +1,1 @@
+{"eps": [0.8], "zweight_same": [1], "zweight_diff": [0], "weight_power": [0.5], "weight_power_z": [0.85], "dist_bgo": [300], "vertex_cluster": [true], "vertex_eps": [200], "vertex_alpha": [100]}

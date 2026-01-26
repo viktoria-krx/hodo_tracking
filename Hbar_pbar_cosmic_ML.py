@@ -129,10 +129,16 @@ print("clustering done")
 
 clustered_hits = pd.concat(clustered_list, ignore_index=True)
 
+print(f"{clustered_hits[(clustered_hits.track_id > -1) & (clustered_hits.event > border_event)].groupby('event').ngroups} of {hits_df[(hits_df.event > border_event)].groupby('event').ngroups} events have at least one cluster\t {clustered_hits[(clustered_hits.track_id > -1) & (clustered_hits.event > border_event)].groupby('event').ngroups/hits_df[(hits_df.event > border_event)].groupby('event').ngroups*100:.2f}%")
+
+print(f"{clustered_hits[(clustered_hits.event > border_event) & (clustered_hits.z_used != 0)].groupby(['event']).ngroups} of {hits_df[(hits_df.event > border_event)].groupby('event').ngroups} events have at least one track\t {clustered_hits[(clustered_hits.event > border_event) & (clustered_hits.z_used != 0)].groupby(['event']).ngroups/hits_df[(hits_df.event > border_event)].groupby('event').ngroups*100:.2f}%")
+
+
 _lines_df = fit_lines_from_clusters_svd(clustered_hits, include_bgo=False, 
                                     use_xyz_errors=True, xyz_error_cols=["dx", "dy", "dz_used"], weight_power=w_pow, weight_power_z=w_pow_z, prefilter_ransac=False, ransac_thresh=15.0, weighted=False, weight_col="dz_used")
 
 print("line fitting done")
+
 
 vertices_df = reconstruct_vertex_from_midpoints(clustered_hits, _lines_df,
                                         bgo_radius=45.0, 
@@ -141,6 +147,9 @@ vertices_df = reconstruct_vertex_from_midpoints(clustered_hits, _lines_df,
 
 print("vertex reconstruction done")
 
+print(f"{vertices_df[(vertices_df.event > border_event)].groupby('event').ngroups} of {hits_df[(hits_df.event > border_event)].groupby('event').ngroups} events have at least one track\t {vertices_df[(vertices_df.event > border_event)].groupby('event').ngroups/hits_df[(hits_df.event > border_event)].groupby('event').ngroups*100:.2f}%")
+
+print(f"{vertices_df[(vertices_df.event > border_event) & (vertices_df.Vz != 0)].groupby(['event']).ngroups} of {hits_df[(hits_df.event > border_event)].groupby('event').ngroups} events have at least one track\t {vertices_df[(vertices_df.event > border_event) & (vertices_df.Vz != 0)].groupby(['event']).ngroups/hits_df[(hits_df.event > border_event)].groupby('event').ngroups*100:.2f}%")
 
 # vertices_df = find_vertices_from_tracks(lines_df, eps=5.0)
 lines_df = _lines_df.merge(vertices_df, on="event", how="left")
@@ -172,7 +181,7 @@ for feat in all_feats:
     plt.show()
 
 
-    plt.hist([event_features_df[event_features_df.Annihilation > 0.5][feat].values, event_features_df[~(event_features_df.Annihilation > 0.5)][feat].values], bins=100, stacked=True, label=["Mixing", "BG"])
+    plt.hist([event_features_df[event_features_df.Annihilation > 0.5][feat].values, event_features_df[~(event_features_df.Annihilation > 0.5)][feat].values], bins=100, stacked=True, label=["Annihilation", "BG"])
     plt.legend()
     plt.xlabel(feat)
     plt.show()
@@ -380,8 +389,71 @@ for thresh in np.arange(0.1, 1.0, 0.1):
     plt.title("pbar Extraction")
     plt.show()
 
+thresh = 0.5
+plt.hist([event_features_df[(event_features_df.prob_Annihilation_cla > thresh)].vertex_x, event_features_df[(event_features_df.prob_Annihilation_cla <= thresh)].vertex_x], bins=100, range=(-100, 100), histtype="step", label=[f"Annihilation prob > {thresh:.1f}", f"Annihilation prob <= {thresh:.1f}"])
+plt.xlabel("Vx in mm")
+plt.legend()
+plt.show()
+
+plt.hist([event_features_df[(event_features_df.prob_Annihilation_cla > thresh)].vertex_y, event_features_df[(event_features_df.prob_Annihilation_cla <= thresh)].vertex_y], bins=100, range=(-100, 100), histtype="step", label=[f"Annihilation prob > {thresh:.1f}", f"Annihilation prob <= {thresh:.1f}"])
+plt.xlabel("Vy in mm")
+plt.legend()
+plt.show()
+
+plt.hist([event_features_df[(event_features_df.prob_Annihilation_cla > thresh)].vertex_z, event_features_df[(event_features_df.prob_Annihilation_cla <= thresh)].vertex_z], bins=100, range=(-100, 100), histtype="step", label=[f"Annihilation prob > {thresh:.1f}", f"Annihilation prob <= {thresh:.1f}"])
+plt.xlabel("Vz in mm")
+plt.legend()
+plt.show()
 
 
 
+# from xgboost import plot_tree
 
+# plt.figure(figsize=(100, 10))  
+# plot_tree(model_cla, num_trees=2) 
+# plt.savefig("xgboost_tree.png", dpi=450)
+# plt.show()
+
+# import graphviz
+# from dtreeviz import model, decision_boundaries
+
+# filt = (event_features_df.vertex_x.notna()) & (event_features_df.opp_track_dt.notna())
+
+
+# X_train_notna, X_test_notna, y_cla_train_notna, y_cla_test_notna = train_test_split(X[filt], y_cla[filt], test_size=0.2, random_state=0)
+
+# sc = StandardScaler()
+
+# X_train_notna = sc.fit_transform(X_train_notna)
+# X_test_notna = sc.transform(X_test_notna)
+
+
+# model_cla_notna = xgb.XGBClassifier(n_estimators=250,
+#     learning_rate=0.1,
+#     subsample=0.6,
+#     colsample_bytree=0.5,
+#     max_depth=4,
+#     )
+# model_cla_notna.fit(X_train_notna, y_cla_train_notna)
+
+
+# for i in np.arange(1, 20):
+#     viz_model = model(
+#         model_cla_notna.get_booster(),
+#         X_train=X_train_notna,
+#         y_train=y_cla_train_notna,
+#         feature_names=ML_feats,
+#         target_name="Annihilation",
+#         class_names=["False", "True"],
+#         tree_index=i,  # Visualizes the second tree (change this index for other trees)
+        
+#     )
+#     # Display the visualization
+#     viz_model.view(orientation="LR")
+
+# # decision_boundaries(model_cla_notna, X, y)
+
+# viz_model.leaf_sizes()
+# viz_model.ctree_leaf_distributions()
+# viz_model.node_stats(node_id=10)
 
