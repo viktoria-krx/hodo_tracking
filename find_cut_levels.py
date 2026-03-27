@@ -686,7 +686,7 @@ for p in p_vals:
     assert B_inside + B_outside == N_BG
     assert S_inside + S_outside == N_Mix
 
-    # B = np.sum((~event_features_df.Hbar) & (~mask_signal))  # BG inside envelope
+    # B = np.sum((~event_features_df.Hbar) & (~mask_signal)) scaler = StandardScaler() # BG inside envelope
     # S = np.sum(event_features_df.Hbar & mask_signal)                # Signal outside envelope
     snr = S_outside / np.sqrt(B_outside) if B_outside>0 else 0
 
@@ -750,7 +750,7 @@ plt.show()
 
 # -----------------------------
 # 7️⃣ Optional: plot 2D KDE with HPD contours
-# -----------------------------
+# -----------------------------scaler = StandardScaler()
 # Create a grid
 n_bgo_min, n_bgo_max = 0, 25
 bgoE_min, bgoE_max = 0, 120
@@ -1067,8 +1067,27 @@ cut_def = {
     "thresholds": thresholds,   # dict {percentile: density_threshold}
     "percentiles": p_vals
 }
-
 joblib.dump(cut_def, "HPD_cut_kde.pkl")
+
+
+
+cut_def = {
+    # --- scaling ---
+    "mean": scaler.mean_,
+    "scale": scaler.scale_,
+
+    # --- KDE reconstruction ---
+    "X_bg_scaled": X_bg_scaled,   # THIS is the key
+    "bandwidth": kde.bandwidth,
+
+    # --- cut definition ---
+    "thresholds": thresholds,
+    "percentiles": p_vals
+}
+
+
+
+joblib.dump(cut_def, "HPD_cut_kde_portable.pkl")
 
 
 # cut_def = joblib.load("HPD_cut_kde.pkl")
